@@ -64,10 +64,9 @@ module Puma
       @launcher.config  = self.config
       @launcher.binder  = self.binder
       @launcher.setup(@options)
-
     end
 
-    ## BACKWARDS COMPAT FOR TESTS
+    ## start BACKWARDS COMPAT
 
     def delete_pidfile
       @launcher.delete_pidfile
@@ -93,6 +92,14 @@ module Puma
       @launcher.write_pid
     end
 
+    def error(str)
+      @launcher.error(str)
+    end
+
+    def debug(str)
+      @launcher.debug(str)
+    end
+
   private
     def parse_options
       @launcher.send(:parse_options)
@@ -101,9 +108,13 @@ module Puma
     def set_rack_environment
       @launcher.send(:set_rack_environment)
     end
+
+    def restart_args
+      @launcher.restart_args
+    end
   public
 
-    ## BACKWARDS COMPAT FOR TESTS
+    ## end BACKWARDS COMPAT
 
     # The Binder object containing the sockets bound to.
     attr_reader :binder
@@ -117,65 +128,17 @@ module Puma
     # The Events object used to output information.
     attr_reader :events
 
-    # Delegate +error+ to +@events+
-    #
-    def error(str)
-      @events.error str
-    end
-
-    def debug(str)
-      @events.log "- #{str}" if @options[:debug]
-    end
 
     def clustered?
-      # remove eventually
-      @options[:workers] > 0
-    end
-
-    def jruby?
-      # remove eventually
-      IS_JRUBY
-    end
-
-    def windows?
-      # remove eventually
-      RUBY_PLATFORM =~ /mswin32|ming32/
+      @launcher.clustered?
     end
 
     def jruby_daemon_start
-      require 'puma/jruby_restart'
-      JRubyRestart.daemon_start(@restart_dir, restart_args)
+      @launcher.jruby_daemon_start
     end
 
     def restart!
-      @options[:on_restart].each do |block|
-        block.call self
-      end
-
-      if jruby?
-        close_binder_listeners
-
-        require 'puma/jruby_restart'
-        JRubyRestart.chdir_exec(@restart_dir, restart_args)
-      elsif windows?
-        close_binder_listeners
-
-        argv = restart_args
-        Dir.chdir(@restart_dir)
-        argv += [redirects] if RUBY_VERSION >= '1.9'
-        Kernel.exec(*argv)
-      else
-        redirects = {:close_others => true}
-        @binder.listeners.each_with_index do |(l, io), i|
-          ENV["PUMA_INHERIT_#{i}"] = "#{io.to_i}:#{l}"
-          redirects[io.to_i] = io.to_i
-        end
-
-        argv = restart_args
-        Dir.chdir(@restart_dir)
-        argv += [redirects] if RUBY_VERSION >= '1.9'
-        Kernel.exec(*argv)
-      end
+      @launcher.restart!
     end
 
     # Parse the options, load the rackup, start the server and wait
@@ -211,19 +174,19 @@ module Puma
       @runner.halt
     end
 
+
+    def jruby?
+      Puma.jruby?
+    end
+
+    def windows?
+      Puma.windows?
+    end
+
   private
     def unsupported(str)
       @events.error(str)
       raise UnsupportedOption
-    end
-
-    def restart_args
-      cmd = @options[:restart_cmd]
-      if cmd
-        cmd.split(' ') + @original_argv
-      else
-        @restart_argv
-      end
     end
 
     # Build the OptionParser object to handle the available options.

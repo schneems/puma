@@ -13,6 +13,16 @@ module Puma
       @events.log str
     end
 
+    # Delegate +error+ to +@events+
+    #
+    def error(str)
+      @events.error str
+    end
+
+    def debug(str)
+      @events.log "- #{str}" if debug
+    end
+
     def config
       @config
     end
@@ -37,7 +47,7 @@ module Puma
     def write_state
       write_pid
 
-      path = @options[:state]
+      path = @state
       return unless path
 
       state = { 'pid' => Process.pid }
@@ -56,15 +66,14 @@ module Puma
     end
 
     def delete_pidfile
-      path = @options[:pidfile]
-      File.unlink(path) if path && File.exist?(path)
+      File.unlink(pidfile) if pidfile && File.exist?(pidfile)
     end
 
     # If configured, write the pid of the current process out
     # to a file.
     #
     def write_pid
-      path = @options[:pidfile]
+      path = pidfile
       return unless path
 
       File.open(path, 'w') { |f| f.puts Process.pid }
@@ -74,15 +83,15 @@ module Puma
       end
     end
 
-    attr_accessor :options, :binder, :config, :events
+    attr_reader   :options
+    attr_accessor :binder, :config, :events
     ## THIS STUFF IS NEEDED FOR RUNNER
 
     def setup(options)
       @options = options
       parse_options
 
-      dir = @options[:directory]
-      Dir.chdir(dir) if dir
+      Dir.chdir(directory) if directory
 
       prune_bundler if prune_bundler?
 
@@ -135,17 +144,15 @@ module Puma
 
 
     def clustered?
-      @options[:workers] > 0
+      workers > 0
     end
 
     def jruby?
-      # remove eventually
-      IS_JRUBY
+      Puma.jruby?
     end
 
     def windows?
-      # remove eventually
-      RUBY_PLATFORM =~ /mswin32|ming32/
+      Puma.windows?
     end
 
 
@@ -175,6 +182,59 @@ module Puma
       end
     end
 
+    def restart!
+      @options[:on_restart].each do |block|
+        block.call self
+      end
+
+      if jruby?
+        close_binder_listeners
+
+        require 'puma/jruby_restart'
+        JRubyRestart.chdir_exec(@restart_dir, restart_args)
+      elsif windows?
+        close_binder_listeners
+
+        argv = restart_args
+        Dir.chdir(@restart_dir)
+        argv += [redirects] if RUBY_VERSION >= '1.9'
+        Kernel.exec(*argv)
+      else
+        redirects = {:close_others => true}
+        @binder.listeners.each_with_index do |(l, io), i|
+          ENV["PUMA_INHERIT_#{i}"] = "#{io.to_i}:#{l}"
+          redirects[io.to_i] = io.to_i
+        end
+
+        argv = restart_args
+        Dir.chdir(@restart_dir)
+        argv += [redirects] if RUBY_VERSION >= '1.9'
+        Kernel.exec(*argv)
+      end
+    end
+
+    def jruby_daemon_start
+      require 'puma/jruby_restart'
+      JRubyRestart.daemon_start(@restart_dir, restart_args)
+    end
+
+    def restart_args
+      cmd = restart_cmd
+      if cmd
+        cmd.split(' ') + @original_argv
+      else
+        @restart_argv
+      end
+    end
+
+    attr_reader   :pidfile, :daemon, :binds, :tag, :directory,
+                   :workers, :debug, :on_restart, :control_url, :control_auth_token, :min_threads,
+                   :max_threads, :redirect_stdout, :redirect_stderr, :redirect_append,
+                   :mode
+
+    attr_accessor :puma_environment
+
+
   private
     def unsupported(str)
       @events.error(str)
@@ -190,14 +250,36 @@ module Puma
       Puma.cli_config = @config
 
       @config.load
+      options             = @config.options
+      @options            = options # option hash runs deep
 
-      @options = @config.options
+      @pidfile            = options[:pidfile]
+      @daemon             = options[:daemon]
+      @binds              = options[:binds]
+      @tag                = options[:tag]
+      @puma_environment   = options[:environment]
+      @preload_app        = options[:preload_app]
+      @directory          = options[:directory]
+      @workers            = options[:workers]
+      @debug              = options[:debug]
+      @on_restart         = options[:on_restart]
+      @restart_cmd        = options[:restart_cmd]
+
+      # Needed for Runner
+      @control_url        = options[:control_url]
+      @control_auth_token = options[:control_auth_token]
+      @min_threads        = options[:min_threads]
+      @max_threads        = options[:max_threads]
+      @redirect_stdout    = options[:redirect_stdout]
+      @redirect_stderr    = options[:redirect_stderr]
+      @redirect_append    = options[:redirect_append]
+      @mode               = options[:mode]
 
       if clustered? && (jruby? || windows?)
         unsupported 'worker mode not supported on JRuby or Windows'
       end
 
-      if @options[:daemon] && windows?
+      if daemon && windows?
         unsupported 'daemon mode not supported on Windows'
       end
     end
@@ -221,25 +303,25 @@ module Puma
     end
 
     def title
-      buffer = "puma #{Puma::Const::VERSION} (#{@options[:binds].join(',')})"
-      buffer << " [#{@options[:tag]}]" if @options[:tag] && !@options[:tag].empty?
+      buffer = "puma #{Puma::Const::VERSION} (#{@binds.join(',')})"
+      buffer << " [#{@tag}]" if @tag && !@tag.empty?
       buffer
     end
 
     def set_rack_environment
-      @options[:environment] = env
-      ENV['RACK_ENV'] = env
+      puma_environment = env
+      ENV['RACK_ENV']  = env
     end
 
     def env
-      @options[:environment]       ||
+        puma_environment           ||
         @cli_options[:environment] ||
         ENV['RACK_ENV']            ||
         'development'
     end
 
     def prune_bundler?
-      @options[:prune_bundler] && clustered? && !@options[:preload_app]
+      @options[:prune_bundler] && clustered? && !preload_app
     end
 
     def setup_signals

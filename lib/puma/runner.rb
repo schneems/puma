@@ -8,11 +8,11 @@ module Puma
     end
 
     def daemon?
-      @options[:daemon]
+      @cli.daemon
     end
 
     def development?
-      @options[:environment] == "development"
+      @cli.puma_environment == "development"
     end
 
     def log(str)
@@ -28,7 +28,7 @@ module Puma
     end
 
     def start_control
-      str = @options[:control_url]
+      str = @cli.control_url
       return unless str
 
       require 'puma/app/status'
@@ -37,7 +37,7 @@ module Puma
 
       app = Puma::App::Status.new @cli
 
-      if token = @options[:control_auth_token]
+      if token = @cli.control_auth_token
         app.auth_token = token unless token.empty? or token == :none
       end
 
@@ -71,23 +71,23 @@ module Puma
     end
 
     def output_header(mode)
-      min_t = @options[:min_threads]
-      max_t = @options[:max_threads]
+      min_t = @cli.min_threads
+      max_t = @cli.max_threads
 
       log "Puma starting in #{mode} mode..."
       log "* Version #{Puma::Const::PUMA_VERSION} (#{ruby_engine}), codename: #{Puma::Const::CODE_NAME}"
       log "* Min threads: #{min_t}, max threads: #{max_t}"
       log "* Environment: #{ENV['RACK_ENV']}"
 
-      if @options[:mode] == :tcp
+      if @cli.mode == :tcp
         log "* Mode: Lopez Express (tcp)"
       end
     end
 
     def redirect_io
-      stdout = @options[:redirect_stdout]
-      stderr = @options[:redirect_stderr]
-      append = @options[:redirect_append]
+      stdout = @cli.redirect_stdout
+      stderr = @cli.redirect_stderr
+      append = @cli.redirect_append
 
       if stdout
         STDOUT.reopen stdout, (append ? "a" : "w")
@@ -116,7 +116,7 @@ module Puma
         raise e
       end
 
-      @cli.binder.parse @options[:binds], self
+      @cli.binder.parse @cli.binds, self
     end
 
     def app
@@ -124,15 +124,15 @@ module Puma
     end
 
     def start_server
-      min_t = @options[:min_threads]
-      max_t = @options[:max_threads]
+      min_t = @cli.min_threads
+      max_t = @cli.max_threads
 
       server = Puma::Server.new app, @cli.events, @options
       server.min_threads = min_t
       server.max_threads = max_t
       server.inherit_binder @cli.binder
 
-      if @options[:mode] == :tcp
+      if @cli.mode == :tcp
         server.tcp_mode!
       end
 
