@@ -54,6 +54,7 @@ module Puma
       @ready = false
 
       @body = nil
+      @body_read_start = nil
       @buffer = nil
       @tempfile = nil
 
@@ -64,6 +65,8 @@ module Puma
 
       @peerip = nil
       @remote_addr_header = nil
+
+      @body_remain = 0
     end
 
     attr_reader :env, :to_io, :body, :io, :timeout_at, :ready, :hijacked,
@@ -102,6 +105,7 @@ module Puma
       @tempfile = nil
       @parsed_bytes = 0
       @ready = false
+      @body_remain = 0
       @peerip = nil
 
       if @buffer
@@ -115,9 +119,16 @@ module Puma
         end
 
         return false
-      elsif fast_check &&
-            IO.select([@to_io], nil, nil, FAST_TRACK_KA_TIMEOUT)
-        return try_to_finish
+      else
+        begin
+          if fast_check &&
+              IO.select([@to_io], nil, nil, FAST_TRACK_KA_TIMEOUT)
+            return try_to_finish
+          end
+        rescue IOError
+          # swallow it
+        end
+
       end
     end
 
@@ -296,7 +307,7 @@ module Puma
         data = @io.read_nonblock(CHUNK_SIZE)
       rescue Errno::EAGAIN
         return false
-      rescue SystemCallError, IOError
+      rescue SystemCallError, IOError, EOFError
         raise ConnectionError, "Connection error detected during read"
       end
 
