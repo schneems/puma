@@ -410,6 +410,8 @@ module Puma
           log "Early termination of worker"
           exit! 0
         else
+          @launcher.send(:close_binder_listeners)
+
           stop_workers
           stop
 
